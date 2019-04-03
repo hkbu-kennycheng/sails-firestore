@@ -24,7 +24,9 @@
   "author": "Kenny Cheng",
   "license": "MIT",
   "dependencies": {
-    "@sailshq/lodash": "^3.10.2"
+    "@google-cloud/firestore": "^1.2.0",
+    "@sailshq/lodash": "^3.10.2",
+    "firebase-admin": "^7.2.0"
   },
   "devDependencies": {
     "eslint": "5.16.0",
