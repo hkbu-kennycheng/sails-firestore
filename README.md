@@ -12,7 +12,7 @@ Strict adherence to an adapter specification enables the (re)use of built-in gen
 To install this adapter, run:
 
 ```sh
-$ npm install @hkbu-kennycheng/sails-firestore
+$ npm install sails-firestore
 ```
 
 Then [connect the adapter](https://sailsjs.com/documentation/reference/configuration/sails-config-datastores) to one or more of your app's datastores.
