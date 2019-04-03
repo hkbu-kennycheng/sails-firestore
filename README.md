@@ -1,4 +1,4 @@
-# @hkbu-kennycheng/sails-firestore
+# sails-firestore
 
 Provides easy access to `Cloud Firestore` from Sails.js & Waterline.
 
