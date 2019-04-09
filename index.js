@@ -2,11 +2,13 @@
  * Module dependencies
  */
 
-var _ = require('@sailshq/lodash');
-var generateQueryByWhere = require('./lib/generate-query-by-where');
-var preProcessRecord = require('./lib/pre-process-record');
-var docToRecord = require('./lib/doc-to-record');
-var admin = require('firebase-admin');
+const _ = require('@sailshq/lodash');
+const each = require('async').each;
+const admin = require('firebase-admin');
+const generateQueryByWhere = require('./lib/generate-query-by-where');
+const preProcessRecord = require('./lib/pre-process-record');
+const docToRecord = require('./lib/doc-to-record');
+const BatchManager = require('./lib/batch-manager');
 
 /**
  * Module state
@@ -131,57 +133,10 @@ module.exports = {
       return done(new Error('Consistency violation: Cannot register datastore: `' + datastoreName + '`, because it is already registered with this adapter!  This could be due to an unexpected race condition in userland code (e.g. attempting to initialize Waterline more than once), or it could be due to a bug in this adapter.  (If you get stumped, reach out at https://sailsjs.com/support.)'));
     }
 
-
-    // Ensure a `url` was configured.
-    // > To help standardize configuration for end users, adapter authors
-    // > are encouraged to support the `url` setting, if conceivable.
-    // >
-    // > Read more here:
-    // > https://sailsjs.com/config/datastores#?the-connection-url
-    //if (!datastoreConfig.url) {
-    //  return done(new Error('Invalid configuration for datastore `' + datastoreName + '`:  Missing `url` (See https://sailsjs.com/config/datastores#?the-connection-url for more info.)'));
-    //}
-
+    // Ensure a `serviceAccount` was configured.
     if (!datastoreConfig.serviceAccount) {
       return done(new Error('Invalid configuration for datastore `' + datastoreName + '`:  Missing `serviceAccount` (See https://sailsjs.com/config/datastores#?the-connection-url for more info.)'));
     }
-
-    // Build a "connection manager" -- an object that contains all of the state for this datastore.
-    // This might be a MySQL connection pool, a Mongo client instance (`db`), or something even simpler.
-    // For example, in sails-postgresql, `manager` encapsulates a connection pool that the stateless
-    // `machinepack-postgresql` driver uses to communicate with the database.  The actual form of the
-    // manager is completely dependent on this adapter.  In other words, it is custom and database-specific.
-    // This is where you should store any custom metadata specific to this datastore.
-    //
-    // > TODO: Replace this setTimeout with real logic that creates the manager.
-    /*setTimeout(function(){
-      var manager;//<< (see the other TODO just above here)
-
-      // Save information about the datastore to the `datastores` dictionary, keyed under
-      // the datastore's unique name.  The information should itself be in the form of a
-      // dictionary (plain JavaScript object), and have three keys:
-      //
-      // `manager`: The database-specific "connection manager" that we just built above.
-      //
-      // `config  : Configuration options for the datastore.  Should be passed straight through
-      //            from what was provided as the `datastoreConfig` argument to this method.
-      //
-      // `driver` : Optional.  A reference to a stateless, underlying Node-Machine driver.
-      //            (For instance `machinepack-postgresql` for the `sails-postgresql` adapter.)
-      //            Note that this stateless, standardized driver will be merged into the main
-      //            concept of an adapter in future versions of the Waterline adapter spec.
-      //            (See https://github.com/node-machine/driver-interface for more informaiton.)
-      //
-      registeredDatastores[datastoreName] = {
-        config: datastoreConfig,
-        manager: manager,
-        driver: undefined // << TODO: include driver here (if relevant)
-      };
-
-      // Inform Waterline that the datastore was registered successfully.
-      return done();
-
-    }, 16);*/
 
     var app = admin.initializeApp({
       credential: admin.credential.cert(datastoreConfig.serviceAccount)
@@ -190,22 +145,24 @@ module.exports = {
     registeredDatastores[datastoreName] = {
       config: datastoreConfig,
       driver: app.firestore(),
+      sequences: {},
       primaryKeyCols: {},
       timestampCols: {},
       dateCols: {},
       blobCols: {}
     };
 
-    _.each(_.keys(models), modelIdentity => {
+    each(_.keys(models), (modelIdentity, next) => {
+      console.log('type of next = ' + typeof next);
 
       // Get the model definition.
       var modelDef = models[modelIdentity];
 
       var primaryKeyAttr = modelDef.definition[modelDef.primaryKey];
 
-      // Ensure that the model's primary key has either `autoIncrement` or `required`
-      if (primaryKeyAttr.required !== true && !primaryKeyAttr.unique !== true && (!primaryKeyAttr.autoMigrations || primaryKeyAttr.autoMigrations.autoIncrement !== true)) {
-        throw new Error('In model `' + modelIdentity + '`, primary key `' + modelDef.primaryKey + '` must have either `required` or `autoIncrement` set.');
+      // Ensure that the model's primary key has either `autoIncrement`, `unique` or `required`
+      if (!(primaryKeyAttr.required === true || (primaryKeyAttr.autoMigrations && primaryKeyAttr.autoMigrations.autoIncrement === true) || (primaryKeyAttr.autoMigrations && primaryKeyAttr.autoMigrations.unique === true))) {
+        return next(new Error('In model `' + modelIdentity + '`, primary key `' + modelDef.primaryKey + '` must have either `required`, `unique` or `autoIncrement` set.'));
       }
 
       // Get the model's primary key column.
@@ -214,12 +171,22 @@ module.exports = {
       // Store the primary key column in the datastore's primary key columns hash.
       registeredDatastores[datastoreName].primaryKeyCols[modelDef.tableName] = primaryKeyCol;
 
-      _.each(modelDef.definition, (val) => {
+      // Declare a var to hold the table's sequence name (if any).
+      var sequenceName = null;
+
+      _.each(modelDef.definition, (val, attributeName) => {
 
         // keep track of timestamp cols
         registeredDatastores[datastoreName].timestampCols[modelDef.tableName] = registeredDatastores[datastoreName].timestampCols[modelDef.tableName] || [];
         if (val.autoMigrations && val.autoMigrations.columnType === '_numbertimestamp') {
           registeredDatastores[datastoreName].timestampCols[modelDef.tableName].push(val.columnName);
+        }
+
+        // If the attribute has `autoIncrement` on it, and it's the primary key,
+        // initialize a sequence for it.
+        if (val.autoMigrations && val.autoMigrations.autoIncrement && (attributeName === modelDef.primaryKey)) {
+          sequenceName = modelDef.tableName + '_' + val.columnName + '_seq';
+          registeredDatastores[datastoreName].sequences[sequenceName] = 0;
         }
 
         registeredDatastores[datastoreName].dateCols[modelDef.tableName] = registeredDatastores[datastoreName].dateCols[modelDef.tableName] || [];
@@ -229,11 +196,22 @@ module.exports = {
         } else if (val.type === 'ref') {
           registeredDatastores[datastoreName].blobCols[modelDef.tableName].push(val.columnName);
         }
+
       });
 
-    });
-
-    return done();
+      if (sequenceName) {
+        registeredDatastores[datastoreName].driver.collection(modelDef.tableName).orderBy(primaryKeyCol, 'DESC').limit(1).get().then(snap => {
+          if (snap.size > 0) {
+            registeredDatastores[datastoreName].sequences[sequenceName] = parseInt(snap.docs[0].id);
+          } else {
+            registeredDatastores[datastoreName].sequences[sequenceName] = 0;
+          }
+          return next();
+        }).catch(next);
+      } else {
+        return next();
+      }
+    }, done);
   },
 
 
@@ -264,20 +242,7 @@ module.exports = {
       return done(new Error('Consistency violation: Attempting to tear down a datastore (`'+datastoreName+'`) which is not currently registered with this adapter.  This is usually due to a race condition in userland code (e.g. attempting to tear down the same ORM instance more than once), or it could be due to a bug in this adapter.  (If you get stumped, reach out at https://sailsjs.com/support.)'));
     }
 
-
-    // Destroy the manager.
-    //
-    // > TODO: Replace this setTimeout with real logic that destroys the manager.
-    //setTimeout(function(){
-    //
-    //  // Now, un-register the datastore.
-    //  delete registeredDatastores[datastoreName];
-    //
-    //  // Inform Waterline that we're done, and that everything went as expected.
-    //  return done();
-    //
-    //}, 16);
-
+    delete registeredDatastores[datastoreName];
     return done();
 
   },
@@ -328,28 +293,20 @@ module.exports = {
       return done(new Error('Consistency violation: Cannot do that with datastore (`'+datastoreName+'`) because no matching datastore entry is registered in this adapter!  This is usually due to a race condition (e.g. a lifecycle callback still running after the ORM has been torn down), or it could be due to a bug in this adapter.  (If you get stumped, reach out at https://sailsjs.com/support.)'));
     }
 
-    // Perform the query (and if relevant, send back a result.)
-    //
-    // > TODO: Replace this setTimeout with real logic that calls
-    // > `done()` when finished. (Or remove this method from the
-    // > adapter altogether
-    //setTimeout(function(){
-    //  return done(new Error('Adapter method (`create`) not implemented yet.'));
-    //}, 16);
-
     var db = dsEntry.driver.collection(query.using);
+
+    var primaryKeyCol = dsEntry.primaryKeyCols[query.using];
+    var sequenceName = query.using + '_' + primaryKeyCol + '_seq';
+    if (!_.isUndefined(dsEntry.sequences[sequenceName]) && _.isNull(query.newRecord[primaryKeyCol]) || query.newRecord[primaryKeyCol] === 0) {
+      query.newRecord[primaryKeyCol] = ++dsEntry.sequences[sequenceName];
+    }
+
+    query.newRecord[primaryKeyCol] = query.newRecord[primaryKeyCol] || db.doc().id;
+
     var data = preProcessRecord(dsEntry, query.using, query.newRecord);
-    (query.newRecord[dsEntry.primaryKeyCols[query.using]] ? db.doc(''+query.newRecord[dsEntry.primaryKeyCols[query.using]]).set(data) : db.add(data)).then(doc => {
-
-      if (query.meta && query.meta.fetch)
-      {return doc.get();}
-
-      return Promise.resolve(null);
-
-    }).then(data => {
-      return done(null, docToRecord(dsEntry, query.using, data));
-    }).catch(err => { return done(err);});
-
+    db.doc(query.newRecord[primaryKeyCol].toString()).set(data).then(() => {
+      return done(null, query.newRecord);
+    }).catch(err => { return done(err); });
   },
 
 
@@ -382,47 +339,35 @@ module.exports = {
       return done(new Error('Consistency violation: Cannot do that with datastore (`'+datastoreName+'`) because no matching datastore entry is registered in this adapter!  This is usually due to a race condition (e.g. a lifecycle callback still running after the ORM has been torn down), or it could be due to a bug in this adapter.  (If you get stumped, reach out at https://sailsjs.com/support.)'));
     }
 
-    // Perform the query (and if relevant, send back a result.)
-    //
-    // > TODO: Replace this setTimeout with real logic that calls
-    // > `done()` when finished. (Or remove this method from the
-    // > adapter altogether
-    //setTimeout(function(){
-    //  return done(new Error('Adapter method (`createEach`) not implemented yet.'));
-    //}, 16);
+    // Get the primary key column for thie table.
+    var primaryKeyCol = dsEntry.primaryKeyCols[query.using];
 
-    //var refs = [];
-    //var recordIdMap = {};
+    // Get the possible sequence name for this table.
+    var sequenceName = query.using + '_' + primaryKeyCol + '_seq';
 
+    const db = dsEntry.driver.collection(query.using);
+    const batchManager = new BatchManager(dsEntry.driver, query.newRecords.length);
 
-    var db = dsEntry.driver.collection(query.using);
-    var records = [];
-    var refs = _.map(query.newRecords, record => {
-      const data = preProcessRecord(dsEntry, query.using, record);
-      return record[dsEntry.primaryKeyCols[query.using]] ?
-             db.doc(record[dsEntry.primaryKeyCols[query.using]]).set(data).then(() => Promise.resolve(db.doc(record[dsEntry.primaryKeyCols[query.using]]))) : db.add(data);
-    });
+    _.each(query.newRecords, (newRecord, i) => {
 
-    _.reduce(refs, async (prev, cur) => {
-      var doc = await prev;
-
-      if (query.meta && query.meta.fetch)
-      {records.push(docToRecord(dsEntry, query.using, await doc.get()));}
-
-      return cur;
-    }).then(doc => {
-      if (doc && query.meta && query.meta.fetch)
-      {return doc.get();}
-
-      return Promise.resolve();
-    }).then((data) => {
-      if (data && query.meta && query.meta.fetch) {
-        records.push(docToRecord(dsEntry, query.using, data));
-        return done(null, records);
+      // If there is a sequence and `null` is being sent in for this record's primary key,
+      // set it to the next value of the sequence.
+      if (!_.isUndefined(dsEntry.sequences[sequenceName]) && _.isNull(newRecord[primaryKeyCol]) || newRecord[primaryKeyCol] === 0) {
+        newRecord[primaryKeyCol] = ++dsEntry.sequences[sequenceName];
       }
 
-      return done();
+      newRecord[primaryKeyCol] = newRecord[primaryKeyCol] || db.doc().id;
+
+      query.newRecords[i] = newRecord;
+
+      const data = preProcessRecord(dsEntry, query.using, newRecord);
+
+      batchManager.getBatchByJobIndex(i).set(db.doc(newRecord[primaryKeyCol].toString()), data);
     });
+
+    batchManager.commitBatches().then(() => {
+      return done(null, query.newRecords);
+    }).catch(err => { return done(err); });
 
   },
 
@@ -457,43 +402,53 @@ module.exports = {
       return done(new Error('Consistency violation: Cannot do that with datastore (`'+datastoreName+'`) because no matching datastore entry is registered in this adapter!  This is usually due to a race condition (e.g. a lifecycle callback still running after the ORM has been torn down), or it could be due to a bug in this adapter.  (If you get stumped, reach out at https://sailsjs.com/support.)'));
     }
 
-    // Perform the query (and if relevant, send back a result.)
-    //
-    // > TODO: Replace this setTimeout with real logic that calls
-    // > `done()` when finished. (Or remove this method from the
-    // > adapter altogether
-    //setTimeout(function(){
-    //  return done(new Error('Adapter method (`update`) not implemented yet.'));
-    //}, 16);
+    // Get the primary key column for thie table.
+    var primaryKeyCol = dsEntry.primaryKeyCols[query.using];
+
+    // Get the possible sequence name for this table.
+    //var sequenceName = query.using + '_' + primaryKeyCol + '_seq';
+
+    const db = dsEntry.driver.collection(query.using);
 
     var records = [];
     generateQueryByWhere(dsEntry, query).get().then(snapshot => {
 
       const data = preProcessRecord(dsEntry, query.using, query.valuesToSet);
 
-      if (snapshot.ref) {
-        return snapshot.ref.update(data).then(() => {
-          return snapshot.ref.get();
-        });
+      if (snapshot.exists || snapshot.size === 1) {
+        var docSnap = snapshot.size === 1 ? snapshot.docs[0] : snapshot;
+        var origData = docToRecord(dsEntry, query.using, docSnap);
+        var newData = _.merge(origData, query.valuesToSet);
+        records = [newData];
+
+        if (query.valuesToSet[primaryKeyCol] && !_.isEqual(query.valuesToSet[primaryKeyCol].toString(), docSnap.id)) {
+
+          const batchManager = new BatchManager(dsEntry.driver, 2);
+          batchManager.getBatchByJobIndex(0).delete(docSnap.ref);
+          batchManager.getBatchByJobIndex(1).set(db.doc(query.valuesToSet[primaryKeyCol].toString()), preProcessRecord(dsEntry, query.using, newData));
+
+          return batchManager.commitBatches();
+        }
+
+        return docSnap.ref.update(preProcessRecord(dsEntry, query.using, query.valuesToSet));
       }
 
       if (snapshot.empty) { return Promise.resolve(); }
 
-      return _.reduce(_.map(snapshot.docs, value => {
-        return value.ref.update(data).then(() => { return value.ref.get(); });
-      }), async (prev, cur) => {
-        var record = await prev;
-        if (query.meta && query.meta.fetch)
-        {records.push(docToRecord(dsEntry, query.using, record));}
-        return cur;
+      const batchManager = new BatchManager(dsEntry.driver, snapshot.size);
+
+      _.each(snapshot.docs, (docSnap, i) => {
+        batchManager.getBatchByJobIndex(i).update(docSnap.ref, data);
       });
 
-    }).then((record) => {
       if (query.meta && query.meta.fetch) {
-        records.push(docToRecord(dsEntry, query.using, record));
-        return done(null, records);
+        records = _.map(snapshot.docs, doc => _.merge(doc.data(), query.valuesToSet));
       }
-      return done();
+
+      return batchManager.commitBatches();
+
+    }).then(() => {
+      return done(null, query.meta && query.meta.fetch ? records : null);
     }).catch(err => { return done(err);});
   },
 
@@ -527,44 +482,33 @@ module.exports = {
       return done(new Error('Consistency violation: Cannot do that with datastore (`'+datastoreName+'`) because no matching datastore entry is registered in this adapter!  This is usually due to a race condition (e.g. a lifecycle callback still running after the ORM has been torn down), or it could be due to a bug in this adapter.  (If you get stumped, reach out at https://sailsjs.com/support.)'));
     }
 
-    // Perform the query (and if relevant, send back a result.)
-    //
-    // > TODO: Replace this setTimeout with real logic that calls
-    // > `done()` when finished. (Or remove this method from the
-    // > adapter altogether
-    //setTimeout(function(){
-    //  return done(new Error('Adapter method (`destroy`) not implemented yet.'));
-    //}, 16);
-
     var records = [];
 
     generateQueryByWhere(dsEntry, query).get().then(snapshot => {
 
-      if (snapshot.ref) {
+      if (snapshot.exists || snapshot.size === 1) {
+        var docSnap = snapshot.size === 1 ? snapshot.docs[0] : snapshot;
+        var origData = docToRecord(dsEntry, query.using, docSnap);
+        records = [origData];
 
-        if (query.meta && query.meta.fetch)
-        {records.push(docToRecord(dsEntry, query.using, snapshot));}
-
-        return snapshot.ref.delete();
+        return docSnap.ref.delete();
       }
 
       if (snapshot.empty) {return Promise.resolve();}
 
-      var refs = _.map(snapshot.docs, value => {
-        if (query.meta && query.meta.fetch)
-        {records.push(docToRecord(dsEntry, query.using, value));}
-        return value.ref.delete();
+      const batchManager = new BatchManager(dsEntry.driver, snapshot.size);
+
+      _.each(snapshot.docs, (docSnap, i) => {
+        if (query.meta && query.meta.fetch) {
+          records.push(docToRecord(dsEntry, query.using, docSnap));
+        }
+        batchManager.getBatchByJobIndex(i).delete(docSnap.ref);
       });
 
-      return _.reduce(refs, async (prev, cur) => {
-        await prev;
-        return cur;
-      });
+      return batchManager.commitBatches();
 
     }).then(() => {
-      if (query.meta && query.meta.fetch)
-      {return done(null, records);}
-      return done();
+      return done(null, query.meta && query.meta.fetch ? records : null);
     }).catch(err => { return done(err);});
   },
 
@@ -783,15 +727,6 @@ module.exports = {
       return done(new Error('Consistency violation: Cannot do that with datastore (`'+datastoreName+'`) because no matching datastore entry is registered in this adapter!  This is usually due to a race condition (e.g. a lifecycle callback still running after the ORM has been torn down), or it could be due to a bug in this adapter.  (If you get stumped, reach out at https://sailsjs.com/support.)'));
     }
 
-    // Define the physical model (e.g. table/etc.)
-    //
-    // > TODO: Replace this setTimeout with real logic that calls
-    // > `done()` when finished. (Or remove this method from the
-    // > adapter altogether
-    //setTimeout(function(){
-    //  return done(new Error('Adapter method (`define`) not implemented yet.'));
-    //}, 16);
-
     return done();
   },
 
@@ -822,27 +757,19 @@ module.exports = {
       return done(new Error('Consistency violation: Cannot do that with datastore (`'+datastoreName+'`) because no matching datastore entry is registered in this adapter!  This is usually due to a race condition (e.g. a lifecycle callback still running after the ORM has been torn down), or it could be due to a bug in this adapter.  (If you get stumped, reach out at https://sailsjs.com/support.)'));
     }
 
-    // Drop the physical model (e.g. table/etc.)
-    //
-    // > TODO: Replace this setTimeout with real logic that calls
-    // > `done()` when finished. (Or remove this method from the
-    // > adapter altogether
-    //setTimeout(function(){
-    //  return done(new Error('Adapter method (`drop`) not implemented yet.'));
-    //}, 16);
-
     dsEntry.driver.collection(tableName).get().then(snapshot => {
 
-      if (snapshot.id) {return snapshot.delete();}
+      if (snapshot.empty) {return Promise.resolve();}
 
-      if (snapshot.size === 0) {return Promise.resolve();}
+      const batchManager = new BatchManager(dsEntry.driver, snapshot.size);
 
-      return snapshot.docs.reduce(async (prev, cur) => {
-        await prev;
-        return cur.ref.delete();
-      }, Promise.resolve());
+      _.each(snapshot.docs, (docSnap, i) => {
+        batchManager.getBatchByJobIndex(i).delete(docSnap.ref);
+      });
 
-    }).then(() => { return done();}).catch(err => { return done(err); });
+      return batchManager.commitBatches();
+
+    }).then(done).catch(done);
 
   },
 
@@ -877,14 +804,9 @@ module.exports = {
       return done(new Error('Consistency violation: Cannot do that with datastore (`'+datastoreName+'`) because no matching datastore entry is registered in this adapter!  This is usually due to a race condition (e.g. a lifecycle callback still running after the ORM has been torn down), or it could be due to a bug in this adapter.  (If you get stumped, reach out at https://sailsjs.com/support.)'));
     }
 
-    // Update the sequence.
-    //
-    // > TODO: Replace this setTimeout with real logic that calls
-    // > `done()` when finished. (Or remove this method from the
-    // > adapter altogether
-    setTimeout(() => {
-      return done(new Error('Adapter method (`setSequence`) not implemented yet.'));
-    }, 16);
+    dsEntry.sequences[sequenceName] = sequenceValue;
+
+    return done();
 
   },
 

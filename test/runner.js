@@ -6,7 +6,7 @@ var TestRunner = require('waterline-adapter-tests');
 
 var adapter = require('../index');
 // fake it as sails-mongo for string type primary key
-adapter.identity = 'sails-mongo';
+//adapter.identity = 'sails-mongo';
 /**
  * Integration Test Runner
  *
