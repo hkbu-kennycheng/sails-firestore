@@ -153,7 +153,6 @@ module.exports = {
     };
 
     each(_.keys(models), (modelIdentity, next) => {
-      console.log('type of next = ' + typeof next);
 
       // Get the model definition.
       var modelDef = models[modelIdentity];
