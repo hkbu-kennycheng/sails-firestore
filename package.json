@@ -1,6 +1,6 @@
 {
   "name": "sails-firestore",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "A Cloud Firestore adapter for Sails / Waterline",
   "main": "index.js",
   "scripts": {
@@ -36,7 +36,9 @@
   "waterlineAdapter": {
     "type": "firestore",
     "interfaces": [
-      "semantic"
+      "migratable",
+      "semantic",
+      "queryable"
     ],
     "features": []
   }
