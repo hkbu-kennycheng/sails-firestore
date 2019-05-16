@@ -55,11 +55,11 @@ This adapter implements the following methods:
 | find                 | Implemented | DQL           |
 | join                 | _**???**_   | DQL           |
 | count                | Implemented | DQL           |
-| sum                  | Planned     | DQL           |
-| avg                  | Planned     | DQL           |
+| sum                  | Implemented | DQL           |
+| avg                  | Implemented | DQL           |
 | define               | _**??**_    | DDL           |
 | drop                 | Implemented | DDL           |
-| setSequence          | _**???**_   | DDL           |
+| setSequence          | Implemented | DDL           |
 
 #### Query language
 
@@ -70,20 +70,20 @@ This adapter implements the following methods:
 | >         | Implemented |             |
 | >=        | Implemented |             |
 | ==        | Implemented |             |
-| !=        | Planned     |             |
-| in        | Implemented | Not tested  |
-| !in       | Planned     |             |
-| contains  | Planned     |             |
-| startsWith| Planned     |             |
-| endsWith  | Planned     |             |
+| !=        | Implemented |             |
+| in        | Implemented |             |
+| !in       | Implemented |             |
+| contains  | Implemented | client-side |
+| startsWith| Implemented |             |
+| endsWith  | Implemented | client-side |
 | and       | Implemented |             |
-| or        | Planned     |             |
+| or        | Implemented |             |
 
 | Option    | Status      | Remark      |
 |:----------|:------------|:------------|
-| limit     | Planned     |             |
-| sort      | Planned     |             |
-| skip      | Planned     |             |
+| limit     | Implemented | client-side |
+| sort      | Implemented | client-side |
+| skip      | Implemented | client-side |
 
 
 ## License
