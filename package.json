@@ -1,6 +1,6 @@
 {
   "name": "sails-firestore",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A Cloud Firestore adapter for Sails / Waterline",
   "main": "index.js",
   "scripts": {
@@ -40,6 +40,8 @@
       "semantic",
       "queryable"
     ],
-    "features": []
+    "features": [
+      "autoIncrement.sequential"
+    ]
   }
 }

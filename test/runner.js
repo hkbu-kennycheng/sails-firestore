@@ -26,5 +26,5 @@ new TestRunner({
   },
 
   // The set of adapter interfaces to test against.
-  interfaces: [/*'associations',*/ 'migratable', 'semantic', 'queryable']
+  interfaces: [/*'associations',*/ 'migratable', 'semantic', 'sql', 'queryable']
 });

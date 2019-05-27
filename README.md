@@ -85,6 +85,7 @@ This adapter implements the following methods:
 | sort      | Implemented | client-side |
 | skip      | Implemented | client-side |
 
+You may see the test result [here](https://gist.github.com/hkbu-kennycheng/1977ec355d8b20fe1bcd092feaba356a).
 
 ## License
 
